@@ -1,0 +1,427 @@
+Data Modeling
+
+Jack Christensen
+http://www.jackchristensen.com
+
+* Goals of the Data Layer
+
+- Unambiguous representation of facts
+- Single representation of facts (DRY)
+- Prevention of invalid facts
+- Sufficient performance for insertion and retrieval of facts
+- Access control
+
+* Costs of a Poor Data Model
+
+- Slowed development
+- Inability to answer questions
+- Answering questions incorrectly
+- Duplication of data allows representation of contradictory facts.
+- Rewrite cost of brown field applications are substantially increased by a poor data layer.
+- Poor performance leading to introduction of unnecessary caching/complexity
+
+* Data or Object First Design
+
+Do we design our system's objects first or database structure first?
+
+- Data layer is foundational
+- The application layer depends on the data layer
+- Many applications can use a single data source
+- Data lifespan typically is lifespan of business
+- Application lifespan is much shorter
+- Objects are ephemeral
+- Ultimate source of truth is database
+- Prototyping could be quicker with objects
+- Data layer is harder to change
+- Question assumes OOP application
+
+* NULL
+
+- NULL can mean unknown.
+- Does an unknown value equal an unknown value?
+- Multiple NULLs are allowed in unique index.
+- Unfortunately, NULL can also mean empty.
+- IS [NOT] DISTINCT FROM operation treats NULL as normal value
+- Use NOT NULL whenever possible.
+
+  select null=null;
+  ∅
+
+  select null is not distinct from null;
+  t
+
+* Keys
+
+- A key is an unique identifier for a row.
+- A key may be composed of multiple columns.
+- A row should always have a primary key.
+- A row may have multiple keys.
+
+* Surrogate Keys
+
+- A surrogate key is a substitute identifier without intrinsic meaning.
+- Serial integers and UUIDs are examples of surrogate keys.
+- Surrogate keys are typically single column, making them easy to use with ORMs.
+- Surrogate keys are typically compact, giving them good search and join performance.
+- Surrogate keys can be immutable.
+
+  create table users (
+    id serial primary key, -- surrogate key
+    username text not null unique, -- natural key
+    email text not null unique, -- another natural key
+    ...
+  );
+
+* Natural Keys
+
+- A natural key is a unique identifier intrinsic to the fact.
+- User name, phone number, and email are examples of natural keys.
+- There is almost always a natural key -- otherwise, how do you tell two facts apart?
+- Since natural keys convey meaning they are easier to understand when browsing a database.
+- Natural keys often are mutable -- mutable natural keys can be slow to update.
+- Use of natural keys can boost performance by eliminating an extra column and unique index.
+- Natural keys can improve performance by reducing the need for joins.
+
+  create table users (
+    username text primary key, -- natural key
+    email text not null unique, -- another natural key
+    ...
+  );
+
+* Surrogate Key Example (p. 1)
+
+  create table users (
+    id serial primary key,
+    username text unique
+  );
+
+  create table subscriptions (
+    author_id integer references users,
+    subscriber_id integer references users,
+    primary key(author_id, subscriber_id)
+  );
+
+* Surrogate Key Example (p. 2)
+
+users table is easy for human to understand.
+
+   id | username
+    1 | Bill
+    2 | Joe
+    3 | Sally
+    4 | Mary
+
+subscriptions table is not.
+
+   author_id | subscriber_id
+           1 |             2
+           3 |             4
+           1 |             4
+           2 |             1
+
+Updating a username is easy and fast.
+
+    update users set username='Joseph' where id=2;
+
+* Natural Key Example (p. 1)
+
+  create table users (
+    username text primary key
+  );
+
+  create table subscriptions (
+    author text references users,
+    subscriber text references users,
+    primary key(author, subscriber)
+  );
+
+* Natural Key Example (p. 2)
+
+users table is easy for human to understand.
+
+  username
+  Bill
+  Joe
+  Sally
+  Mary
+
+subscriptions table is easy for human to understand.
+
+  author | subscriber
+  Bill   | Joe
+  Sally  | Mary
+  Bill   | Mary
+  Joe    | Bill
+
+Updating a username is harder.
+
+    update users set username='Joseph' where username='Joe';
+    ERROR:  update or delete on table "users" violates foreign key
+      constraint "subscriptions_author_fkey" on table "subscriptions"
+    DETAIL:  Key (username)=(Joe) is still referenced from table "subscriptions".
+
+* Natural Key Example (p. 3)
+
+The solution is "on update cascade".
+
+  create table subscriptions (
+    author text references users on update cascade,
+    subscriber text references users on update cascade,
+    primary key(author, subscriber)
+  );
+
+This causes updates to cascade from users to subscriptions.
+
+  update users set username='Joseph' where username='Joe';
+
+  select * from subscriptions;
+
+  author | subscriber
+  Sally  | Mary
+  Bill   | Mary
+  Joseph | Bill
+  Bill   | Joseph
+
+
+
+* Complex Associations (p. 1)
+
+Simple foreign keys can ensure correctness for simple associations (association is a line).
+
+  create table companies(
+    name text primary key,
+  );
+
+  create table employees(
+    name text primary key,
+    company_name text not null references companies
+  );
+
+But simple foreign keys can fail to guarantee correctness for complex associations (correct association is triangle or diamond).
+
+* Complex Associations (p. 2)
+
+
+  create table companies(
+    id serial primary key,
+    name text not null unique
+  );
+
+  create table employees(
+    id serial primary key
+    company_id integer not null references companies,
+    name text not null,
+    unique(company_id, name)
+  );
+
+  create table projects(
+    id serial primary key,
+    company_id integer not null references companies,
+    name text not null,
+    unique(company_id, name)
+  );
+
+  create table project_members(
+    project_id integer not null references projects,
+    employee_id integer not null references employees
+  );
+
+* Complex Associations (p. 3)
+
+  create table companies(
+    name text primary key
+  );
+
+  create table employees(
+    company_name text references companies,
+    name text,
+    primary key(company_name, name)
+  );
+
+  create table projects(
+    company_name text references companies,
+    name text,
+    primary key(company_name, name)
+  );
+
+  create table project_members(
+    company_name text not null,
+    project_name text not null,
+    employee_name text not null,
+    foreign key (company_name, project_name) references projects,
+    foreign key (company_name, employee_name) references employees
+  );
+
+* Complex Associations (p. 4)
+
+- Composite foreign keys can solve triangle and diamond relationship issues.
+- Composite foreign keys fit well with natural keys, but work with surrogates.
+- Composite natural keys can eliminate joins.
+- Composite keys can normalize otherwise denormalized schemas.
+- Unfortunately, Rails associations do not support composite keys.
+- Foreign keys require a unique constraint on the foreign table, but it does not have to be the primary key.
+- Rails could use the primary key, and an extra key could be maintained for data integrity and performance.
+
+* Ranges
+
+  create table reservations(
+    id serial primary key,
+    room text not null,
+    start_date date not null,
+    end_date date not null
+  );
+
+Multiple problems with this modeling of reservations.
+
+- Allows invalid facts - end_date could be before start_date
+- Ambiguous facts - is start_date inclusive or exclusive?
+- Ambiguous facts - is end_date inclusive or exclusive?
+- Allows invalid facts - room could be overbooked.
+
+* Ranges and Exclusion Constraints
+
+  create table reservations(
+    id serial primary key,
+    room text not null,
+    date_range daterange not null,
+    exclude using gist (room with =, date_range with &&)
+  );
+
+- Range beginning cannot be before start.
+- Inclusivity of lower and upper ends of range part is of data type.
+- Exclusion constraint prevents overbooking.
+
+* Uniqueness Constraints
+
+Uniqueness constraints can enforce has-one-and-only-one relationships.
+
+  create table user_preferences(
+    id serial primary key,
+    user_id integer not null unique references users,
+    ...
+  );
+
+The above could also be modeled with user_id as the primary key.
+
+  create table user_preferences(
+    user_id integer primary key references users,
+    ...
+  );
+
+* Partial Unique Indexes
+
+Uniqueness can be constrained more narrowly with a partial unique index.
+
+  create table email_addresses(
+    email text primary key,
+    person_id integer not null references people,
+    "primary" boolean not null
+  );
+
+  create unique index on email_addresses (person_id) where "primary";
+
+This allows multiple emails per person, but only one primary email.
+
+In addition, performance may be improved when searching for primary emails.
+
+* Time Zones
+
+PostgreSQL connections have a session time zone.
+
+  jack=# select now();
+                now
+  -------------------------------
+   2015-06-22 08:09:35.452387-05
+  (1 row)
+
+  jack=# set timezone = 'America/Los_Angeles';
+  SET
+  jack=# select now();
+                now
+  -------------------------------
+   2015-06-22 06:09:39.300113-07
+  (1 row)
+
+- Default time zones can be set per server, database, and user.
+
+* Time Types
+
+- PostgreSQL has timestamp and timestamptz types.
+- timestamp has no concept of time zone -- instead use timestamptz in almost all cases.
+- timestamptz does not store time zone -- it automatically converts to UTC on input and from UTC to session time zone on output.
+
+  jack=# select '2015-06-01 12:00:00-11'::timestamptz;
+        timestamptz
+  ------------------------
+   2015-06-01 18:00:00-05
+  (1 row)
+
+- date type should be used with care when used in combination with times.
+- Does '2015-06-01'::date include '2015-06-01 23:00:00-07'::timestamptz?
+- PostgreSQL calculations would take place in session time zone.
+
+* Time Zone Conversions
+
+"at time zone" can convert a timestamptz to a timestamp in another time zone.
+
+  jack=# select '2015-06-01 12:00:00-11'::timestamptz at time zone 'America/New_York';
+        timezone
+  ---------------------
+   2015-06-01 19:00:00
+  (1 row)
+
+"at time zone" can also convert a timestamp to a timestamptz in a time time.
+
+  jack=# select '2015-06-01 12:00:00'::timestamp at time zone 'America/New_York';
+          timezone
+  ------------------------
+   2015-06-01 11:00:00-05
+  (1 row)
+
+* Rails Time Considerations
+
+- Rails' migration DSL defaults to timestamp.
+- Use execute to run SQL DDL to create correct types.
+- Rails default settings may not play nice with timestamptz.
+- Configure config.time_zone and config.active_record.default_timezone to work correctly with PostgreSQL time zones.
+- Using database views that do time calculations requires careful configuration of Rails and PostgreSQL time zones to get expected results.
+
+* Check Constraints
+
+Check constraints encode arbitrary validations.
+
+  create table examples(
+    username text check(username ~ '^[A-Za-z0-9]+$'),
+    rating integer check(rating between 1 and 5),
+    birthdate date check(birthdate between '1900-01-01' and current_date),
+    amount numeric(8,2) check(amount > 0)
+  );
+
+Belongs to one and only one relationships can be ensured by check constraints.
+
+  create table email_addresses(
+    email text primary key,
+    person_id integer references people,
+    company_id integer references companies,
+    check(((person_id is null)::integer + (company_id is null)::integer)=1)
+  );
+
+Constraints of arbitrary complexity can be encoded in constraint triggers.
+
+* (Im)mutability
+
+- Databases are inherently mutable.
+- Permissions can be used to make immutable data (revoke update permission)
+- Rails migrations can make this hard due to application running as database owner.
+- Snapshots or immutable data is a requirement for many domains.
+- A snapshot does not necessarily violate DRY. e.g. ordered items should snapshot their price at the time of the order.
+
+* Comments
+
+PostgreSQL provides for attaching comments to database objects.
+
+  comment on table transactions is 'main log of monetary transactions. append only';
+  comment on column transactions.amount is 'positive is a credit to customer';
+
+- Table comments can be displayed in psql with the "\dt+" command.
+- Column comments can be displayed in psql with the "\d+" command.
